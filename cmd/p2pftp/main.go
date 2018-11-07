@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/libp2p/go-libp2p-peer"
 	"io/ioutil"
 	"log"
 	"os"
@@ -11,7 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leslie-wang/p2pftp/node"
+	"github.com/libp2p/go-libp2p-peer"
+
+	"github.com/leslie-wang/libp2p-ftp/node"
 	"github.com/pkg/errors"
 
 	"github.com/urfave/cli"
@@ -121,9 +122,8 @@ func put(cctx *cli.Context) error {
 		remoteFile = path.Join(remoteFile, path.Base(cctx.Args()[0]))
 	}
 
-
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers,false)
+	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func get(cctx *cli.Context) error {
 	defer f.Close()
 
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers,false)
+	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func delete(cctx *cli.Context) error {
 		return errors.New("Invalid number of arguments")
 	}
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers,false)
+	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,7 @@ func delete(cctx *cli.Context) error {
 	})
 }
 
-func request(ctx context.Context, n *node.Node, request func (ctx context.Context, id peer.ID) error) error {
+func request(ctx context.Context, n *node.Node, request func(ctx context.Context, id peer.ID) error) error {
 	for i := 0; i < 10; i++ {
 		peers, err := n.DiscoverPeers(ctx)
 		if err != nil {

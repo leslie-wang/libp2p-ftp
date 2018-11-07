@@ -12,8 +12,8 @@ import (
 
 	"github.com/libp2p/go-libp2p-peer"
 
-	"github.com/leslie-wang/p2pftp/handler"
-	"github.com/leslie-wang/p2pftp/types"
+	"github.com/leslie-wang/libp2p-ftp/handler"
+	"github.com/leslie-wang/libp2p-ftp/types"
 
 	"github.com/pkg/errors"
 
