@@ -37,6 +37,20 @@ func main() {
 			Usage: "Unique string to identify group of nodes. Share this with your friends to let them connect with you",
 			Value: "p2p_ftp",
 		},
+		cli.BoolFlag{
+			Name:  "verbose",
+			Usage: "Verbose mode to display more log",
+		},
+		cli.IntFlag{
+			Name:  "retry-count",
+			Usage: "Number of retry",
+			Value: 10,
+		},
+		cli.DurationFlag{
+			Name:  "retry-interval",
+			Usage: "Number of retry",
+			Value: time.Second,
+		},
 	}
 
 	app.Commands = []cli.Command{
@@ -77,7 +91,7 @@ func main() {
 }
 
 func listen(ctx *cli.Context) error {
-	_, err := node.StartNode(context.Background(), ctx.GlobalString("rendezvous"), bootstrapPeers, true)
+	_, err := node.StartNode(context.Background(), ctx.GlobalString("rendezvous"), bootstrapPeers, true, ctx.GlobalBool("verbose"))
 	if err != nil {
 		return err
 	}
@@ -90,12 +104,8 @@ func list(cctx *cli.Context) error {
 		return errors.New("Invalid number of arguments")
 	}
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
-	if err != nil {
-		return err
-	}
 
-	return request(ctx, n, func(ctx context.Context, id peer.ID) error {
+	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
 		list, err := n.ListRequest(ctx, id, cctx.Args()[0])
 		if err != nil {
 			return err
@@ -123,12 +133,8 @@ func put(cctx *cli.Context) error {
 	}
 
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
-	if err != nil {
-		return err
-	}
 
-	return request(ctx, n, func(ctx context.Context, id peer.ID) error {
+	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
 		return n.PutRequest(ctx, id, content, remoteFile)
 	})
 }
@@ -163,12 +169,8 @@ func get(cctx *cli.Context) error {
 	defer f.Close()
 
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
-	if err != nil {
-		return err
-	}
 
-	return request(ctx, n, func(ctx context.Context, id peer.ID) error {
+	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
 		return n.GetRequest(ctx, id, cctx.Args()[0], f)
 	})
 }
@@ -178,19 +180,19 @@ func delete(cctx *cli.Context) error {
 		return errors.New("Invalid number of arguments")
 	}
 	ctx := context.Background()
-	n, err := node.StartNode(ctx, cctx.GlobalString("rendezvous"), bootstrapPeers, false)
-	if err != nil {
-		return err
-	}
 
-	return request(ctx, n, func(ctx context.Context, id peer.ID) error {
+	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
 		return n.DeleteRequest(ctx, id, cctx.Args()[0])
 	})
 }
 
-func request(ctx context.Context, n *node.Node, request func(ctx context.Context, id peer.ID) error) error {
-	for i := 0; i < 10; i++ {
-		peers, err := n.DiscoverPeers(ctx)
+func request(ctx context.Context, rendezvous string, retryCount int, retryInterval time.Duration, verbose bool, request func(ctx context.Context, n *node.Node, id peer.ID) error) error {
+	for i := 0; i < retryCount; i++ {
+		n, err := node.StartNode(ctx, rendezvous, bootstrapPeers, false, verbose)
+		if err != nil {
+			return err
+		}
+		peers, err := n.DiscoverPeers(ctx, verbose)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -201,16 +203,23 @@ func request(ctx context.Context, n *node.Node, request func(ctx context.Context
 				continue
 			}
 
-			if err := request(ctx, p.ID); err != nil {
-				fmt.Println(err)
+			if err := request(ctx, n, p.ID); err != nil {
+				if verbose {
+					fmt.Println(err)
+				}
 			} else {
-				fmt.Println("request success")
 				return nil
 			}
 		}
 
-		fmt.Println("Unable read, sleep 1 minute and try again")
-		time.Sleep(time.Minute)
+		if verbose {
+			fmt.Println("Unable read, sleep 1 minute and try again")
+		}
+
+		if err := n.Close(); err != nil {
+			return err
+		}
+		time.Sleep(retryInterval)
 	}
 	return nil
 }

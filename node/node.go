@@ -40,24 +40,31 @@ func (n *Node) ID() peer.ID {
 }
 
 // DiscoverPeers discover peers in the DHT network
-func (n *Node) DiscoverPeers(ctx context.Context) ([]pstore.PeerInfo, error) {
+func (n *Node) DiscoverPeers(ctx context.Context, verbose bool) ([]pstore.PeerInfo, error) {
 	tctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 	peers, err := n.kadDHT.FindProviders(tctx, n.rendezvousPoint)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Found %d peers!\n", len(peers))
+	if verbose {
+		fmt.Printf("Found %d peers!\n", len(peers))
 
-	for _, p := range peers {
-		fmt.Println("Peer: ", p)
+		for _, p := range peers {
+			fmt.Println("Peer: ", p)
+		}
 	}
-
 	return peers, nil
 }
 
+// Close close current node and its handler
+func (n *Node) Close() error {
+	return n.host.Close()
+}
+
+
 // StartNode starts current node and connect to dht network
-func StartNode(ctx context.Context, rendezvous string, bootstrapPeers []string, announce bool) (*Node, error) {
+func StartNode(ctx context.Context, rendezvous string, bootstrapPeers []string, announce, verbose bool) (*Node, error) {
 	// libp2p.New constructs a new libp2p Host.
 	// Other options can be added here.
 	var err error
@@ -88,9 +95,13 @@ func StartNode(ctx context.Context, rendezvous string, bootstrapPeers []string, 
 		peerinfo, _ := pstore.InfoFromP2pAddr(addr.Multiaddr())
 
 		if err := node.host.Connect(ctx, *peerinfo); err != nil {
-			fmt.Println(err)
+			if verbose {
+				fmt.Println(err)
+			}
 		} else {
-			fmt.Println("Connection established with bootstrap node: ", *peerinfo)
+			if verbose{
+				fmt.Println("Connection established with bootstrap node: ", *peerinfo)
+			}
 			ok = true
 		}
 	}
