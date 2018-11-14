@@ -12,7 +12,7 @@ require (
 	github.com/gxed/eventfd v0.0.0-20160916113412-80a92cca79a8 // indirect
 	github.com/gxed/hashland v0.0.0-20180221191214-d9f6b97f8db2 // indirect
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
-	github.com/ipfs/go-cid v0.9.0
+	github.com/ipfs/go-cid v0.9.0 // indirect
 	github.com/ipfs/go-datastore v3.2.0+incompatible // indirect
 	github.com/ipfs/go-ipfs-addr v0.1.25
 	github.com/ipfs/go-ipfs-util v1.2.8 // indirect
@@ -28,7 +28,7 @@ require (
 	github.com/libp2p/go-flow-metrics v0.2.0 // indirect
 	github.com/libp2p/go-libp2p v6.0.23+incompatible
 	github.com/libp2p/go-libp2p-circuit v2.3.2+incompatible // indirect
-	github.com/libp2p/go-libp2p-crypto v2.0.1+incompatible // indirect
+	github.com/libp2p/go-libp2p-crypto v2.0.1+incompatible
 	github.com/libp2p/go-libp2p-host v3.0.15+incompatible
 	github.com/libp2p/go-libp2p-interface-connmgr v0.0.21 // indirect
 	github.com/libp2p/go-libp2p-interface-pnet v3.0.0+incompatible // indirect
@@ -65,7 +65,7 @@ require (
 	github.com/multiformats/go-multiaddr-dns v0.2.5 // indirect
 	github.com/multiformats/go-multiaddr-net v1.6.3 // indirect
 	github.com/multiformats/go-multibase v0.3.0 // indirect
-	github.com/multiformats/go-multihash v1.0.8
+	github.com/multiformats/go-multihash v1.0.8 // indirect
 	github.com/multiformats/go-multistream v0.3.9 // indirect
 	github.com/opentracing/opentracing-go v1.0.2 // indirect
 	github.com/pkg/errors v0.8.0

@@ -10,51 +10,49 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libp2p/go-libp2p-crypto"
+
 	"github.com/libp2p/go-libp2p-peer"
 
-	"github.com/leslie-wang/libp2p-ftp/handler"
 	"github.com/leslie-wang/libp2p-ftp/types"
 
 	"github.com/pkg/errors"
 
-	cid "github.com/ipfs/go-cid"
 	iaddr "github.com/ipfs/go-ipfs-addr"
 	libp2p "github.com/libp2p/go-libp2p"
 	host "github.com/libp2p/go-libp2p-host"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pstore "github.com/libp2p/go-libp2p-peerstore"
-	mh "github.com/multiformats/go-multihash"
 )
 
 // Node is the structure for current node
 type Node struct {
-	host            host.Host
-	rendezvousPoint cid.Cid
-	kadDHT          *dht.IpfsDHT
-	handler         *handler.Handler
+	host   host.Host
+	pid    peer.ID
+	kadDHT *dht.IpfsDHT
 }
 
-// ID returns local node's ID
-func (n *Node) ID() peer.ID {
-	return n.host.ID()
+// Host returns node's host
+func (n *Node) Host() host.Host {
+	return n.host
 }
 
-// DiscoverPeers discover peers in the DHT network
-func (n *Node) DiscoverPeers(ctx context.Context, verbose bool) ([]pstore.PeerInfo, error) {
+// FindPeer discover remote peer in the DHT network
+func (n *Node) FindPeer(ctx context.Context, peerID string) (err error) {
 	tctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
-	peers, err := n.kadDHT.FindProviders(tctx, n.rendezvousPoint)
-	if err != nil {
-		return nil, err
-	}
-	if verbose {
-		fmt.Printf("Found %d peers!\n", len(peers))
 
-		for _, p := range peers {
-			fmt.Println("Peer: ", p)
-		}
+	n.pid, err = peer.IDB58Decode(peerID)
+	if err != nil {
+		return
 	}
-	return peers, nil
+	pi, err := n.kadDHT.FindPeer(tctx, n.pid)
+	if err != nil {
+		return
+	}
+	fmt.Printf("Found peers: %v!\n", pi)
+
+	return n.host.Connect(ctx, pi)
 }
 
 // Close close current node and its handler
@@ -62,26 +60,29 @@ func (n *Node) Close() error {
 	return n.host.Close()
 }
 
-
 // StartNode starts current node and connect to dht network
-func StartNode(ctx context.Context, rendezvous string, bootstrapPeers []string, announce, verbose bool) (*Node, error) {
+func StartNode(ctx context.Context, privateKey string, bootstrapNodes []string) (*Node, error) {
 	// libp2p.New constructs a new libp2p Host.
 	// Other options can be added here.
 	var err error
 	node := &Node{}
 
-	v1b := cid.V1Builder{Codec: cid.Raw, MhType: mh.SHA2_256}
-	node.rendezvousPoint, err = v1b.Sum([]byte(rendezvous))
+	opts := []libp2p.Option{}
+	if privateKey != "" {
+		privBytes, err := crypto.ConfigDecodeKey(privateKey)
+		if err != nil {
+			return nil, err
+		}
+		priv, err := crypto.UnmarshalPrivateKey(privBytes)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, libp2p.Identity(priv))
+	}
+	node.host, err = libp2p.New(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
-
-	node.host, err = libp2p.New(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	node.handler = handler.NewHandler(node.host)
 
 	node.kadDHT, err = dht.New(ctx, node.host)
 	if err != nil {
@@ -90,18 +91,14 @@ func StartNode(ctx context.Context, rendezvous string, bootstrapPeers []string, 
 
 	// Let's connect to the bootstrap nodes first. They will tell us about the other nodes in the network.
 	ok := false
-	for _, peerAddr := range bootstrapPeers {
+	for _, peerAddr := range bootstrapNodes {
 		addr, _ := iaddr.ParseString(peerAddr)
 		peerinfo, _ := pstore.InfoFromP2pAddr(addr.Multiaddr())
 
 		if err := node.host.Connect(ctx, *peerinfo); err != nil {
-			if verbose {
-				fmt.Println(err)
-			}
+			fmt.Println(err)
 		} else {
-			if verbose{
-				fmt.Println("Connection established with bootstrap node: ", *peerinfo)
-			}
+			fmt.Println("Connection established with bootstrap node: ", *peerinfo)
 			ok = true
 		}
 	}
@@ -109,27 +106,32 @@ func StartNode(ctx context.Context, rendezvous string, bootstrapPeers []string, 
 		return nil, errors.New("Unable to connect any bootstrap nodes")
 	}
 
-	if !announce {
-		return node, nil
-	}
-
-	// register handler for each method
-	node.handler.MkRoutes()
-
-	// announce myself
 	fmt.Printf("Announcing ourselves: %s (%s)\n", node.host.ID().String(), node.host.ID().Pretty())
-	tctx, cancel := context.WithTimeout(ctx, time.Second*10)
-	defer cancel()
+	return node, nil
+}
 
-	return node, node.kadDHT.Provide(tctx, node.rendezvousPoint, true)
+// PingRequest sends ping request to remote peer
+func (n *Node) PingRequest(ctx context.Context)  error {
+	stream, err := n.host.NewStream(ctx, n.pid, types.PingURL)
+	if err != nil {
+		return err
+	}
+	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
+
+	pong, err := rw.ReadString('\n');
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s is received\n", strings.TrimSpace(pong))
+	return rw.Flush()
 }
 
 // ListRequest sends list request to remote peer
-func (n *Node) ListRequest(ctx context.Context, pid peer.ID, dir string) (files []string, err error) {
+func (n *Node) ListRequest(ctx context.Context, dir string) (files []string, err error) {
 	if !path.IsAbs(dir) {
 		return nil, errors.New("please use absolute path")
 	}
-	stream, err := n.host.NewStream(ctx, pid, types.ListURL)
+	stream, err := n.host.NewStream(ctx, n.pid, types.ListURL)
 	if err != nil {
 		return nil, err
 	}
@@ -174,11 +176,11 @@ func (n *Node) ListRequest(ctx context.Context, pid peer.ID, dir string) (files 
 }
 
 // DeleteRequest sends delete request to remote peer
-func (n *Node) DeleteRequest(ctx context.Context, pid peer.ID, dir string) error {
+func (n *Node) DeleteRequest(ctx context.Context, dir string) error {
 	if !path.IsAbs(dir) {
 		return errors.New("please use absolute path")
 	}
-	stream, err := n.host.NewStream(ctx, pid, types.DeleteURL)
+	stream, err := n.host.NewStream(ctx, n.pid, types.DeleteURL)
 	if err != nil {
 		return err
 	}
@@ -212,11 +214,11 @@ func (n *Node) DeleteRequest(ctx context.Context, pid peer.ID, dir string) error
 }
 
 // GetRequest sends get request to remote peer
-func (n *Node) GetRequest(ctx context.Context, pid peer.ID, filename string, dst io.Writer) error {
+func (n *Node) GetRequest(ctx context.Context, filename string, dst io.Writer) error {
 	if !path.IsAbs(filename) {
 		return errors.New("please use absolute path")
 	}
-	stream, err := n.host.NewStream(ctx, pid, types.GetURL)
+	stream, err := n.host.NewStream(ctx, n.pid, types.GetURL)
 	if err != nil {
 		return err
 	}
@@ -291,11 +293,11 @@ func (n *Node) GetRequest(ctx context.Context, pid peer.ID, filename string, dst
 }
 
 // PutRequest sends get request to remote peer
-func (n *Node) PutRequest(ctx context.Context, pid peer.ID, content []byte, remoteDir string) error {
+func (n *Node) PutRequest(ctx context.Context, content []byte, remoteDir string) error {
 	if !path.IsAbs(remoteDir) {
 		return errors.New("please use absolute path for remote path")
 	}
-	stream, err := n.host.NewStream(ctx, pid, types.PutURL)
+	stream, err := n.host.NewStream(ctx, n.pid, types.PutURL)
 	if err != nil {
 		return err
 	}

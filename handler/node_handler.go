@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -11,32 +12,54 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leslie-wang/libp2p-ftp/node"
 	"github.com/leslie-wang/libp2p-ftp/types"
 
-	host "github.com/libp2p/go-libp2p-host"
 	inet "github.com/libp2p/go-libp2p-net"
 )
 
-// Handler is the struct for handler request
-type Handler struct {
-	host host.Host
+// NodeHandler is the struct for handler request
+type NodeHandler struct {
+	conf *types.Config
+	node *node.Node
 }
 
-// NewHandler creates one handler
-func NewHandler(h host.Host) *Handler {
-	return &Handler{host: h}
+// NewNodeHandler creates one handler
+func NewNodeHandler(c *types.Config) *NodeHandler {
+	return &NodeHandler{conf: c}
 }
 
 // Close is to close handler and its corresponding host
-func (h *Handler) Close() {
+func (h *NodeHandler) Close() {
+	h.node.Close()
 }
 
-// MkRoutes creates route handler
-func (h *Handler) MkRoutes() {
-	h.host.SetStreamHandler(types.ListURL, list)
-	h.host.SetStreamHandler(types.DeleteURL, delete)
-	h.host.SetStreamHandler(types.GetURL, get)
-	h.host.SetStreamHandler(types.PutURL, put)
+// Serve starts node
+func (h *NodeHandler) Serve(ctx context.Context) (err error) {
+	h.node, err = node.StartNode(ctx, h.conf.ServerPrivateKey, h.conf.BootstrapNodes)
+	if err != nil {
+		return
+	}
+
+	h.node.Host().SetStreamHandler(types.PingURL, ping)
+	h.node.Host().SetStreamHandler(types.ListURL, list)
+	h.node.Host().SetStreamHandler(types.DeleteURL, delete)
+	h.node.Host().SetStreamHandler(types.GetURL, get)
+	h.node.Host().SetStreamHandler(types.PutURL, put)
+
+	select {}
+}
+
+func ping(stream inet.Stream) {
+	// Create a buffer stream for non blocking read and write.
+	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
+	defer rw.Flush()
+
+	log.Printf("ping request")
+	_, err := rw.WriteString("pong\n")
+	if err != nil {
+		fmt.Println(err)
+	}
 }
 
 func list(stream inet.Stream) {
@@ -92,7 +115,7 @@ func delete(stream inet.Stream) {
 		}
 	}
 
-	if err := os.RemoveAll(strings.TrimSpace(dir)); err != nil {
+	if err := os.Remove(strings.TrimSpace(dir)); err != nil {
 		if _, err := rw.WriteString(fmt.Sprintf("%s\n\n", err.Error())); err != nil {
 			fmt.Println(err)
 		}

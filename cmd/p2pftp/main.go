@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path"
-	"strings"
-	"time"
 
-	"github.com/libp2p/go-libp2p-peer"
+	"github.com/leslie-wang/libp2p-ftp/handler"
+	"github.com/leslie-wang/libp2p-ftp/types"
 
-	"github.com/leslie-wang/libp2p-ftp/node"
 	"github.com/pkg/errors"
 
 	"github.com/urfave/cli"
@@ -33,23 +33,9 @@ func main() {
 	app.Usage = "simple p2pftp application"
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
-			Name:  "rendezvous, r",
-			Usage: "Unique string to identify group of nodes. Share this with your friends to let them connect with you",
-			Value: "p2p_ftp",
-		},
-		cli.BoolFlag{
-			Name:  "verbose",
-			Usage: "Verbose mode to display more log",
-		},
-		cli.IntFlag{
-			Name:  "retry-count",
-			Usage: "Number of retry",
-			Value: 10,
-		},
-		cli.DurationFlag{
-			Name:  "retry-interval",
-			Usage: "Number of retry",
-			Value: time.Second,
+			Name:  "conf, c",
+			Usage: "configure file name with whole path",
+			Value: "/etc/libp2p-ftp/conf.json",
 		},
 	}
 
@@ -58,6 +44,11 @@ func main() {
 			Name:   "listen",
 			Usage:  "listen as ftp server",
 			Action: listen,
+		},
+		{
+			Name:   "connect",
+			Usage:  "connect to remote peer",
+			Action: connect,
 		},
 		{
 			Name:      "list",
@@ -90,31 +81,60 @@ func main() {
 	}
 }
 
+func loadConf(file string) (*types.Config, error) {
+	content, err := ioutil.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	conf := &types.Config{}
+	err = json.Unmarshal(content, conf)
+	return conf, err
+}
+
 func listen(ctx *cli.Context) error {
-	_, err := node.StartNode(context.Background(), ctx.GlobalString("rendezvous"), bootstrapPeers, true, ctx.GlobalBool("verbose"))
+	conf, err := loadConf(ctx.GlobalString("conf"))
 	if err != nil {
 		return err
 	}
 
-	select {}
+	h := handler.NewNodeHandler(conf)
+	defer h.Close()
+
+	return h.Serve(context.Background())
+}
+
+func connect(ctx *cli.Context) error {
+	conf, err := loadConf(ctx.GlobalString("conf"))
+	if err != nil {
+		return err
+	}
+
+	h := handler.NewHTTPHandler(conf)
+	defer h.Close()
+
+	return h.Serve(context.Background())
 }
 
 func list(cctx *cli.Context) error {
 	if len(cctx.Args()) < 1 {
 		return errors.New("Invalid number of arguments")
 	}
-	ctx := context.Background()
+	conf, err := loadConf(cctx.GlobalString("conf"))
+	if err != nil {
+		return err
+	}
+	resp, err := httpRequest(fmt.Sprintf("http://localhost:%d%s?%s=%s", conf.HTTPListenPort, types.ListURL, types.QueryKeyDestination, cctx.Args()[0]))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
 
-	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
-		list, err := n.ListRequest(ctx, id, cctx.Args()[0])
-		if err != nil {
-			return err
-		}
-		for _, f := range list {
-			fmt.Println(f)
-		}
-		return nil
-	})
+	fmt.Println(string(data))
+	return nil
 }
 
 func put(cctx *cli.Context) error {
@@ -122,21 +142,20 @@ func put(cctx *cli.Context) error {
 		return errors.New("Invalid number of arguments")
 	}
 
-	content, err := ioutil.ReadFile(cctx.Args()[0])
+	if !path.IsAbs(cctx.Args()[0]) {
+		return errors.New("please use absolute destination path\n")
+	}
+	if !path.IsAbs(cctx.Args()[1]) {
+		return errors.New("please use absolute source path\n")
+	}
+
+	conf, err := loadConf(cctx.GlobalString("conf"))
 	if err != nil {
 		return err
 	}
-
-	remoteFile := cctx.Args()[1]
-	if strings.HasSuffix(remoteFile, "/") {
-		remoteFile = path.Join(remoteFile, path.Base(cctx.Args()[0]))
-	}
-
-	ctx := context.Background()
-
-	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
-		return n.PutRequest(ctx, id, content, remoteFile)
-	})
+	_, err = httpRequest(fmt.Sprintf("http://localhost:%d%s?%s=%s&%s=%s", conf.HTTPListenPort, types.PutURL,
+		types.QueryKeyDestination, cctx.Args()[1], types.QueryKeySource, cctx.Args()[0]))
+	return err
 }
 
 func get(cctx *cli.Context) error {
@@ -144,82 +163,45 @@ func get(cctx *cli.Context) error {
 		return errors.New("Invalid number of arguments")
 	}
 
-	var f *os.File
-	filename := path.Base(cctx.Args()[0])
-	if path.IsAbs(cctx.Args()[1]) {
-		var err error
-		f, err = os.Create(path.Join(cctx.Args()[1], filename))
-		if err != nil {
-			return err
-		}
-	} else {
-		wd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		localDir := path.Join(wd, cctx.Args()[1])
-		if err := os.MkdirAll(localDir, 0700); err != nil {
-			return err
-		}
-		f, err = os.Create(path.Join(localDir, filename))
-		if err != nil {
-			return err
-		}
+	if !path.IsAbs(cctx.Args()[0]) {
+		return errors.New("please use absolute destination path\n")
 	}
-	defer f.Close()
+	if !path.IsAbs(cctx.Args()[1]) {
+		return errors.New("please use absolute source path\n")
+	}
 
-	ctx := context.Background()
-
-	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
-		return n.GetRequest(ctx, id, cctx.Args()[0], f)
-	})
+	conf, err := loadConf(cctx.GlobalString("conf"))
+	if err != nil {
+		return err
+	}
+	_, err = httpRequest(fmt.Sprintf("http://localhost:%d%s?%s=%s&%s=%s", conf.HTTPListenPort, types.GetURL,
+		types.QueryKeyDestination, cctx.Args()[0], types.QueryKeySource, cctx.Args()[1]))
+	return err
 }
 
 func delete(cctx *cli.Context) error {
-	if len(cctx.Args()) < 1 {
+	if len(cctx.Args()) != 1 {
 		return errors.New("Invalid number of arguments")
 	}
-	ctx := context.Background()
-
-	return request(ctx, cctx.GlobalString("rendezvous"), cctx.GlobalInt("retry-count"), cctx.GlobalDuration("retry-interval"), cctx.GlobalBool("verbose"), func(ctx context.Context, n *node.Node, id peer.ID) error {
-		return n.DeleteRequest(ctx, id, cctx.Args()[0])
-	})
+	conf, err := loadConf(cctx.GlobalString("conf"))
+	if err != nil {
+		return err
+	}
+	_, err = httpRequest(fmt.Sprintf("http://localhost:%d%s?%s=%s", conf.HTTPListenPort, types.DeleteURL, types.QueryKeyDestination, cctx.Args()[0]))
+	return err
 }
 
-func request(ctx context.Context, rendezvous string, retryCount int, retryInterval time.Duration, verbose bool, request func(ctx context.Context, n *node.Node, id peer.ID) error) error {
-	for i := 0; i < retryCount; i++ {
-		n, err := node.StartNode(ctx, rendezvous, bootstrapPeers, false, verbose)
-		if err != nil {
-			return err
-		}
-		peers, err := n.DiscoverPeers(ctx, verbose)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		for _, p := range peers {
-			if p.ID == n.ID() || len(p.Addrs) == 0 {
-				// No sense connecting to ourselves or if addrs are not available
-				continue
-			}
-
-			if err := request(ctx, n, p.ID); err != nil {
-				if verbose {
-					fmt.Println(err)
-				}
-			} else {
-				return nil
-			}
-		}
-
-		if verbose {
-			fmt.Println("Unable read, sleep 1 minute and try again")
-		}
-
-		if err := n.Close(); err != nil {
-			return err
-		}
-		time.Sleep(retryInterval)
+func httpRequest(url string) (*http.Response, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if resp.StatusCode != 200 {
+		data, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("Non 200 reply: %s", string(data))
+	}
+	return resp, nil
 }
