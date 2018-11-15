@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/whyrusleeping/go-logging"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -36,6 +37,11 @@ func main() {
 			Name:  "conf, c",
 			Usage: "configure file name with whole path",
 			Value: "/etc/libp2p-ftp/conf.json",
+		},
+		cli.IntFlag{
+			Name:  "verbose",
+			Usage: "log level: CRITICAL(0), ERROR(1), WARNING(2), NOTICE(3), INFO(4), DEBUG(5)",
+			Value: 4,
 		},
 	}
 
@@ -100,6 +106,11 @@ func listen(ctx *cli.Context) error {
 	h := handler.NewNodeHandler(conf)
 	defer h.Close()
 
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	backendLeveled := logging.AddModuleLevel(backend)
+	backendLeveled.SetLevel(logging.Level(ctx.GlobalInt("verbose")), "")
+	logging.SetBackend(backendLeveled)
+
 	return h.Serve(context.Background())
 }
 
@@ -111,6 +122,11 @@ func connect(ctx *cli.Context) error {
 
 	h := handler.NewHTTPHandler(conf)
 	defer h.Close()
+
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	backendLeveled := logging.AddModuleLevel(backend)
+	backendLeveled.SetLevel(logging.Level(ctx.GlobalInt("verbose")), "")
+	logging.SetBackend(backendLeveled)
 
 	return h.Serve(context.Background())
 }

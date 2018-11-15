@@ -39,14 +39,11 @@ func (n *Node) Host() host.Host {
 
 // FindPeer discover remote peer in the DHT network
 func (n *Node) FindPeer(ctx context.Context, peerID string) (err error) {
-	tctx, cancel := context.WithTimeout(ctx, time.Second*10)
-	defer cancel()
-
 	n.pid, err = peer.IDB58Decode(peerID)
 	if err != nil {
 		return
 	}
-	pi, err := n.kadDHT.FindPeer(tctx, n.pid)
+	pi, err := n.kadDHT.FindPeer(ctx, n.pid)
 	if err != nil {
 		return
 	}
